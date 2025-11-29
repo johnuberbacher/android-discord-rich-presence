@@ -15,7 +15,8 @@ class DesktopRPC {
     this.desktopIP = null;
     this.isEnabled = false;
     this.lastUpdate = null;
-    this.updateThrottle = 60000; // Throttle updates to every 60 seconds
+    this.lastPackageName = null;
+    this.updateThrottle = 2000; // Throttle updates to every 2 seconds (only if same app)
   }
 
   /**
@@ -95,9 +96,9 @@ class DesktopRPC {
       return;
     }
 
-    // Throttle updates
+    // Throttle updates only if it's the same app (allow immediate updates for different apps)
     const now = Date.now();
-    if (this.lastUpdate && (now - this.lastUpdate) < this.updateThrottle) {
+    if (this.lastPackageName === packageName && this.lastUpdate && (now - this.lastUpdate) < this.updateThrottle) {
       return;
     }
 
@@ -132,6 +133,7 @@ class DesktopRPC {
       }
 
       this.lastUpdate = now;
+      this.lastPackageName = packageName;
       console.log('✅ DesktopRPC: Update sent successfully');
     } catch (error) {
       console.error('❌ DesktopRPC: Error updating:', error.message);

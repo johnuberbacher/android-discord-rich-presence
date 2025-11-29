@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { StyleSheet, View, AppState, NativeModules, FlatList, ScrollView, Alert } from 'react-native';
-import { Appbar, PaperProvider, Text, TextInput, Button, Dialog, Portal, Switch, Card, Paragraph } from 'react-native-paper';
+import { Appbar, PaperProvider, Text, TextInput, Button, Dialog, Portal, Switch, Card, Paragraph, useTheme } from 'react-native-paper';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import notifee, { AndroidImportance, EventType } from '@notifee/react-native';
 import desktopRPC from './DesktopRPC';
@@ -342,14 +342,14 @@ export default function App() {
       } else if (nextAppState === 'active') {
         // Reload packages when app comes to foreground
         loadPackages();
+        // Immediately check and update foreground app when app becomes active
+        await updateNotificationWithForegroundApp(true, setDesktopConnected);
       }
     });
 
-    // Update notification periodically when in background (every 1 second)
+    // Update notification periodically (every 1 second) - works in both background and active states
     notificationIntervalRef.current = setInterval(() => {
-      if (AppState.currentState === 'background') {
-        updateNotificationWithForegroundApp(true, setDesktopConnected);
-      }
+      updateNotificationWithForegroundApp(true, setDesktopConnected);
     }, 1000);
 
     // Check connection validity every 60 seconds
@@ -563,7 +563,76 @@ export default function App() {
 
   return (
     <PaperProvider>
-      <View style={styles.container}>
+      <AppContent
+        packages={packages}
+        editingPackage={editingPackage}
+        editText={editText}
+        editClientId={editClientId}
+        testingClientId={testingClientId}
+        clientIdTestResult={clientIdTestResult}
+        customNames={customNames}
+        clientIds={clientIds}
+        enabledApps={enabledApps}
+        desktopIP={desktopIP}
+        desktopConnected={desktopConnected}
+        desktopEnabled={desktopEnabled}
+        showDesktopSettings={showDesktopSettings}
+        desktopConnecting={desktopConnecting}
+        setEditingPackage={setEditingPackage}
+        setEditText={setEditText}
+        setEditClientId={setEditClientId}
+        setClientIdTestResult={setClientIdTestResult}
+        setDesktopIP={setDesktopIP}
+        setShowDesktopSettings={setShowDesktopSettings}
+        handleEditPackage={handleEditPackage}
+        saveCustomName={saveCustomName}
+        getDisplayNameForList={getDisplayNameForList}
+        isAppEnabledForList={isAppEnabledForList}
+        toggleAppEnabled={toggleAppEnabled}
+        testClientId={testClientId}
+        connectDesktop={connectDesktop}
+        disconnectDesktop={disconnectDesktop}
+        saveDesktopSettings={saveDesktopSettings}
+      />
+    </PaperProvider>
+  );
+}
+
+function AppContent({
+  packages,
+  editingPackage,
+  editText,
+  editClientId,
+  testingClientId,
+  clientIdTestResult,
+  customNames,
+  clientIds,
+  enabledApps,
+  desktopIP,
+  desktopConnected,
+  desktopEnabled,
+  showDesktopSettings,
+  desktopConnecting,
+  setEditingPackage,
+  setEditText,
+  setEditClientId,
+  setClientIdTestResult,
+  setDesktopIP,
+  setShowDesktopSettings,
+  handleEditPackage,
+  saveCustomName,
+  getDisplayNameForList,
+  isAppEnabledForList,
+  toggleAppEnabled,
+  testClientId,
+  connectDesktop,
+  disconnectDesktop,
+  saveDesktopSettings,
+}) {
+  const theme = useTheme();
+
+  return (
+    <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
         <Appbar.Header>
           <Appbar.Content title="Detected Apps" />
           <Appbar.Action icon="magnify" onPress={() => {}} />
@@ -782,15 +851,13 @@ export default function App() {
       </Portal>
       
       <StatusBar style="auto" />
-      </View>
-    </PaperProvider>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff'
   },
   header: {
     flexDirection: 'row',
@@ -817,7 +884,7 @@ const styles = StyleSheet.create({
   },
   listContainer: {
     flex: 1,
-    paddingBottom: 10,
+    paddingVertical: 10,
   },
   list: {
     flex: 1,
