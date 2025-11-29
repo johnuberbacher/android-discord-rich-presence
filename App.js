@@ -18,6 +18,12 @@ let lastNotificationData = { title: 'Hello World', body: 'Hello World', details:
 let lastLoggedApp = null;
 let lastLogTime = 0;
 
+// Track the last package that was actively being updated to Discord
+let lastUpdatedPackage = null;
+
+// Track the last notification title to detect changes
+let lastNotificationTitle = null;
+
 // Storage keys
 const PACKAGES_STORAGE_KEY = '@packages_seen';
 const CUSTOM_NAMES_STORAGE_KEY = '@custom_names';
@@ -144,11 +150,17 @@ const updateNotificationWithForegroundApp = async (updateDiscord = true, setDesk
       if (isNullApp) {
         // Show "No app detected" when app is null or this app is in foreground
         await updateForegroundNotification('No app detected', '');
+        // Clear Discord status if we were updating an app
+        if (lastUpdatedPackage && desktopRPC.isConnected && updateDiscord) {
+          await desktopRPC.clearActivity();
+          lastUpdatedPackage = null;
+        }
         return;
       }
       
-      // Track app changes
-      const shouldLog = !lastLoggedApp || lastLoggedApp !== packageName || (Date.now() - lastLogTime) > 10000;
+      // Track app changes - if package changed, we need to update notification immediately
+      const packageChanged = lastLoggedApp !== packageName;
+      const shouldLog = !lastLoggedApp || packageChanged || (Date.now() - lastLogTime) > 10000;
       if (shouldLog) {
         lastLoggedApp = packageName;
         lastLogTime = Date.now();
@@ -159,10 +171,10 @@ const updateNotificationWithForegroundApp = async (updateDiscord = true, setDesk
         await storePackage(packageName);
       }
       
-      // Check if app is enabled
+      // Check if app is enabled (must have client_id set AND be toggled ON)
       const appEnabled = await isAppEnabled(packageName);
       
-      // Only show notification and send RPC if app is enabled
+      // Show "No App Detected" UNLESS the app has its client_id set AND its been toggled ON
       if (appEnabled) {
         // Get custom display name
         const displayName = await getDisplayName(packageName);
@@ -173,16 +185,34 @@ const updateNotificationWithForegroundApp = async (updateDiscord = true, setDesk
         
         await updateForegroundNotification(title, body);
         
+        // Only send updates for the app currently in the notification
+        // If we were updating a different app, clear Discord status first
+        if (lastUpdatedPackage && lastUpdatedPackage !== packageName) {
+          // Switched from a different app - clear Discord status
+          if (desktopRPC.isConnected && updateDiscord) {
+            await desktopRPC.clearActivity();
+          }
+        }
+        
         // Update Discord RPC if enabled
         if (updateDiscord) {
           if (desktopRPC.isConnected) {
             // Try to send update - connection check happens in DesktopRPC if needed
             await updateDiscordRPC(displayName, packageName, setDesktopConnectedCallback);
+            // Track that we're now updating this package
+            lastUpdatedPackage = packageName;
           }
         }
       } else {
-        // App is not enabled, show "No app detected"
+        // App doesn't have client_id set OR is not toggled ON - show "No app detected"
+        // Always update notification immediately to reflect current state
         await updateForegroundNotification('No app detected', '');
+        
+        // If we were updating an app (any app), clear Discord status when switching to untoggled app
+        if (lastUpdatedPackage && desktopRPC.isConnected && updateDiscord) {
+          await desktopRPC.clearActivity();
+          lastUpdatedPackage = null;
+        }
       }
     } else {
       await updateForegroundNotification('null', 'Module not available');
@@ -199,8 +229,11 @@ export const updateForegroundNotification = async (title = 'Hello World', body =
   const displayTitle = (!title || title === 'null' || title.trim() === '') ? 'No app detected' : title;
   const displayBody = (!body || body === 'null' || body.trim() === '') ? '' : body;
   
+  // Always update notification, even if title appears the same (to ensure it reflects current state)
   // Store the latest notification data for restoration if dismissed
   lastNotificationData = { title: displayTitle, body: displayBody, details };
+  lastNotificationTitle = displayTitle;
+  
   // Create a channel (required for Android)
   const channelId = await notifee.createChannel({
     id: 'foreground-service',
@@ -209,6 +242,7 @@ export const updateForegroundNotification = async (title = 'Hello World', body =
   });
 
   // Display notification as foreground service (but not persistent on screen)
+  // Always update to ensure it reflects the current foreground app state
   await notifee.displayNotification({
     id: FOREGROUND_NOTIFICATION_ID,
     title: displayTitle,
@@ -306,20 +340,21 @@ export default function App() {
     // Load packages, custom names, client IDs, and enabled apps on startup
     const loadPackages = async () => {
       try {
-        const packagesJson = await AsyncStorage.getItem(PACKAGES_STORAGE_KEY);
-        const loadedPackages = packagesJson ? JSON.parse(packagesJson) : [];
+        // Batch AsyncStorage reads for better performance
+        const keys = [PACKAGES_STORAGE_KEY, CUSTOM_NAMES_STORAGE_KEY, CLIENT_IDS_STORAGE_KEY, ENABLED_APPS_STORAGE_KEY];
+        const results = await AsyncStorage.multiGet(keys);
+        const data = Object.fromEntries(results);
+        
+        const loadedPackages = data[PACKAGES_STORAGE_KEY] ? JSON.parse(data[PACKAGES_STORAGE_KEY]) : [];
         setPackages(loadedPackages);
         
-        const customNamesJson = await AsyncStorage.getItem(CUSTOM_NAMES_STORAGE_KEY);
-        const loadedCustomNames = customNamesJson ? JSON.parse(customNamesJson) : {};
+        const loadedCustomNames = data[CUSTOM_NAMES_STORAGE_KEY] ? JSON.parse(data[CUSTOM_NAMES_STORAGE_KEY]) : {};
         setCustomNames(loadedCustomNames);
         
-        const clientIdsJson = await AsyncStorage.getItem(CLIENT_IDS_STORAGE_KEY);
-        const loadedClientIds = clientIdsJson ? JSON.parse(clientIdsJson) : {};
+        const loadedClientIds = data[CLIENT_IDS_STORAGE_KEY] ? JSON.parse(data[CLIENT_IDS_STORAGE_KEY]) : {};
         setClientIds(loadedClientIds);
         
-        const enabledAppsJson = await AsyncStorage.getItem(ENABLED_APPS_STORAGE_KEY);
-        const loadedEnabledApps = enabledAppsJson ? JSON.parse(enabledAppsJson) : {};
+        const loadedEnabledApps = data[ENABLED_APPS_STORAGE_KEY] ? JSON.parse(data[ENABLED_APPS_STORAGE_KEY]) : {};
         setEnabledApps(loadedEnabledApps);
       } catch (error) {
         // Error loading packages
@@ -347,12 +382,12 @@ export default function App() {
 
     loadDesktopSettings();
 
-    // Reload packages periodically when app is active
+    // Reload packages periodically when app is active (reduced frequency for better performance)
     packagesReloadIntervalRef.current = setInterval(() => {
       if (AppState.currentState === 'active') {
         loadPackages();
       }
-    }, 2000);
+    }, 5000);
 
     // Function to restore notification if it was dismissed
     const restoreNotification = async () => {
@@ -387,6 +422,12 @@ export default function App() {
       // When app enters background, update notification with foreground app name
       if (nextAppState === 'background') {
         await updateNotificationWithForegroundApp(true, setDesktopConnected);
+      } else if (nextAppState === 'inactive') {
+        // Device locked or app interrupted - clear Discord status
+        if (desktopRPC.isConnected) {
+          await desktopRPC.clearActivity();
+          lastUpdatedPackage = null;
+        }
       } else if (nextAppState === 'active') {
         // Reload packages when app comes to foreground
         loadPackages();
@@ -540,9 +581,12 @@ export default function App() {
       }
       // If CLIENT_ID was added, keep current enabled state (defaults to disabled)
       
-      await AsyncStorage.setItem(CUSTOM_NAMES_STORAGE_KEY, JSON.stringify(newCustomNames));
-      await AsyncStorage.setItem(CLIENT_IDS_STORAGE_KEY, JSON.stringify(newClientIds));
-      await AsyncStorage.setItem(ENABLED_APPS_STORAGE_KEY, JSON.stringify(newEnabledApps));
+      // Batch AsyncStorage writes for better performance
+      await AsyncStorage.multiSet([
+        [CUSTOM_NAMES_STORAGE_KEY, JSON.stringify(newCustomNames)],
+        [CLIENT_IDS_STORAGE_KEY, JSON.stringify(newClientIds)],
+        [ENABLED_APPS_STORAGE_KEY, JSON.stringify(newEnabledApps)],
+      ]);
       setCustomNames(newCustomNames);
       setClientIds(newClientIds);
       setEnabledApps(newEnabledApps);
@@ -1045,22 +1089,6 @@ const styles = StyleSheet.create({
     fontFamily: 'monospace',
     marginBottom: 15,
   },
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    textAlign: 'center',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    fontFamily: 'monospace',
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#fff',
-    borderRadius: 8,
-    padding: 8,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    textAlign: 'center',
   textInput: {
     marginBottom: 10,
   },
@@ -1118,9 +1146,6 @@ const styles = StyleSheet.create({
   },
   statusConnected: {
     color: '#57F287',
-  },
-  disconnectButton: {
-    backgroundColor: '#ff6b6b',
   },
   clientIdContainer: {
     flexDirection: 'row',

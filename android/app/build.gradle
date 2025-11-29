@@ -121,6 +121,12 @@ android {
             crunchPngs enablePngCrunchInRelease.toBoolean()
         }
     }
+    applicationVariants.all { variant ->
+        variant.outputs.all {
+            def appName = "Android-Discord-Rich-Presence"
+            outputFileName = "${appName}-${variant.versionName}-${variant.name}.apk"
+        }
+    }
     packagingOptions {
         jniLibs {
             def enableLegacyPackaging = findProperty('expo.useLegacyPackaging') ?: 'false'

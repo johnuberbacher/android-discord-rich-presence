@@ -106,9 +106,6 @@ class DesktopRPC {
     // Note: Connection check is done in App.js before calling setActivity
     // We don't check here to avoid blocking updates unnecessarily
 
-    
-    console.log(`📤 DesktopRPC: Sending update to desktop - ${displayName} (${packageName})`);
-
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 3000);
@@ -135,9 +132,7 @@ class DesktopRPC {
 
       this.lastUpdate = now;
       this.lastPackageName = packageName;
-      console.log('✅ DesktopRPC: Update sent successfully');
     } catch (error) {
-      console.error('❌ DesktopRPC: Error updating:', error.message);
       // Don't throw - fail silently to avoid disrupting app
     }
   }
