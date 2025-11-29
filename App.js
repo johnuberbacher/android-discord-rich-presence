@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View, AppState, NativeModules, FlatList, TouchableOpacity, TextInput, Modal } from 'react-native';
+import { StyleSheet, Text, View, AppState, NativeModules, FlatList, TouchableOpacity, TextInput, Modal, ScrollView, Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import notifee, { AndroidImportance, EventType } from '@notifee/react-native';
+import desktopRPC from './DesktopRPC';
 
 const { ForegroundAppModule } = NativeModules;
 
@@ -15,6 +16,8 @@ let lastNotificationData = { title: 'Hello World', body: 'Hello World', details:
 // Storage keys
 const PACKAGES_STORAGE_KEY = '@packages_seen';
 const CUSTOM_NAMES_STORAGE_KEY = '@custom_names';
+const DESKTOP_IP_KEY = '@desktop_ip';
+const DESKTOP_ENABLED_KEY = '@desktop_enabled';
 
 // Function to get custom name for package, or return package name
 const getDisplayName = async (packageName) => {
@@ -44,8 +47,22 @@ const storePackage = async (packageName) => {
   }
 };
 
+// Function to update Discord Rich Presence via desktop app
+const updateDiscordRPC = async (displayName, packageName) => {
+  try {
+    if (!desktopRPC.isConnected) {
+      return;
+    }
+
+    // Update Discord Rich Presence via desktop app
+    await desktopRPC.setActivity(displayName, packageName);
+  } catch (error) {
+    console.error('Error updating Discord RPC:', error);
+  }
+};
+
 // Function to get foreground app name and update notification
-const updateNotificationWithForegroundApp = async () => {
+const updateNotificationWithForegroundApp = async (updateDiscord = true) => {
   try {
     if (ForegroundAppModule) {
       const result = await ForegroundAppModule.getForegroundAppName();
@@ -69,6 +86,11 @@ const updateNotificationWithForegroundApp = async () => {
       const body = packageName;
       
       await updateForegroundNotification(title, body);
+      
+      // Update Discord RPC if enabled
+      if (updateDiscord) {
+        await updateDiscordRPC(displayName, packageName);
+      }
     } else {
       await updateForegroundNotification('null', 'Module not available');
     }
@@ -116,6 +138,13 @@ export default function App() {
   const [editingPackage, setEditingPackage] = useState(null);
   const [editText, setEditText] = useState('');
   const [customNames, setCustomNames] = useState({});
+  
+  // Desktop RPC state
+  const [desktopIP, setDesktopIP] = useState('');
+  const [desktopConnected, setDesktopConnected] = useState(false);
+  const [desktopEnabled, setDesktopEnabled] = useState(false);
+  const [showDesktopSettings, setShowDesktopSettings] = useState(false);
+  const [desktopConnecting, setDesktopConnecting] = useState(false);
 
   useEffect(() => {
     // Register foreground service handler
@@ -176,6 +205,25 @@ export default function App() {
 
     loadPackages();
 
+    // Load desktop app settings
+    const loadDesktopSettings = async () => {
+      try {
+        const saved = await desktopRPC.loadSavedIP();
+        if (saved && saved.ip) {
+          setDesktopIP(saved.ip);
+          if (saved.enabled) {
+            setDesktopEnabled(true);
+            // Try to connect
+            connectDesktop(saved.ip);
+          }
+        }
+      } catch (error) {
+        console.error('Error loading desktop settings:', error);
+      }
+    };
+
+    loadDesktopSettings();
+
     // Reload packages periodically when app is active
     packagesReloadIntervalRef.current = setInterval(() => {
       if (AppState.currentState === 'active') {
@@ -212,10 +260,10 @@ export default function App() {
     };
 
     // Listen to app state changes
-    const appStateSubscription = AppState.addEventListener('change', (nextAppState) => {
+    const appStateSubscription = AppState.addEventListener('change', async (nextAppState) => {
       // When app enters background, update notification with foreground app name
       if (nextAppState === 'background') {
-        updateNotificationWithForegroundApp();
+        await updateNotificationWithForegroundApp();
       } else if (nextAppState === 'active') {
         // Reload packages when app comes to foreground
         loadPackages();
@@ -239,8 +287,67 @@ export default function App() {
       }
       appStateSubscription.remove();
       notifee.stopForegroundService();
+      // Disconnect desktop RPC
+      if (desktopRPC.isConnected) {
+        desktopRPC.disable().catch(console.error);
+      }
     };
   }, []);
+
+  // Connect to desktop app
+  const connectDesktop = async (ipAddress) => {
+    if (!ipAddress || ipAddress.trim() === '') {
+      Alert.alert('Error', 'Desktop IP address is required');
+      return;
+    }
+
+    setDesktopConnecting(true);
+    try {
+      await desktopRPC.initialize(ipAddress.trim());
+      const health = await desktopRPC.testConnection();
+      setDesktopConnected(health.connected);
+      setDesktopEnabled(true);
+      Alert.alert('Success', `Connected to desktop app!${health.connected ? '\nDiscord is connected.' : '\nWaiting for Discord connection...'}`);
+      
+      // Update RPC with current app
+      await updateNotificationWithForegroundApp(true);
+    } catch (error) {
+      console.error('Error connecting to desktop app:', error);
+      Alert.alert('Error', `Failed to connect: ${error.message}\n\nMake sure:\n• Desktop app is running\n• Both devices on same WiFi\n• IP address is correct`);
+      setDesktopConnected(false);
+    } finally {
+      setDesktopConnecting(false);
+    }
+  };
+
+  // Disconnect from desktop app
+  const disconnectDesktop = async () => {
+    try {
+      await desktopRPC.disable();
+      setDesktopConnected(false);
+      setDesktopEnabled(false);
+      Alert.alert('Success', 'Disconnected from desktop app');
+    } catch (error) {
+      console.error('Error disconnecting from desktop app:', error);
+    }
+  };
+
+  // Save desktop settings
+  const saveDesktopSettings = async () => {
+    try {
+      if (desktopIP.trim()) {
+        if (desktopConnected) {
+          await disconnectDesktop();
+        }
+        await connectDesktop(desktopIP.trim());
+      } else {
+        setShowDesktopSettings(false);
+      }
+    } catch (error) {
+      console.error('Error saving desktop settings:', error);
+      Alert.alert('Error', 'Failed to save settings');
+    }
+  };
 
   const handleEditPackage = (packageName) => {
     setEditingPackage(packageName);
@@ -273,7 +380,17 @@ export default function App() {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Detected Apps</Text>
+      <View style={styles.header}>
+        <Text style={styles.title}>Detected Apps</Text>
+        <TouchableOpacity
+          style={[styles.discordButton, desktopConnected && styles.discordButtonConnected]}
+          onPress={() => setShowDesktopSettings(true)}
+        >
+          <Text style={styles.discordButtonText}>
+            {desktopConnected ? '✓ Desktop' : 'Desktop RPC'}
+          </Text>
+        </TouchableOpacity>
+      </View>
       {packages.length === 0 ? (
         <Text style={styles.emptyText}>No apps detected yet. Switch to another app to see it here.</Text>
       ) : (
@@ -330,6 +447,76 @@ export default function App() {
           </View>
         </View>
       </Modal>
+
+      <Modal
+        visible={showDesktopSettings}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setShowDesktopSettings(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <ScrollView contentContainerStyle={styles.modalContent}>
+            <Text style={styles.modalTitle}>Desktop Companion App</Text>
+            <Text style={styles.modalDescription}>
+              Connect to your desktop companion app to show your current app as Discord Rich Presence.{'\n\n'}
+              <Text style={styles.infoText}>
+              ℹ️ Make sure:
+              {'\n'}• Desktop app is running
+              {'\n'}• Both devices on same WiFi
+              {'\n'}• Enter the IP shown in desktop app
+              </Text>
+            </Text>
+            
+            <Text style={styles.inputLabel}>Desktop App IP Address</Text>
+            <Text style={styles.inputHint}>
+              Enter the IP address shown in your desktop app (e.g., 192.168.1.100:8080)
+            </Text>
+            <TextInput
+              style={styles.textInput}
+              value={desktopIP}
+              onChangeText={setDesktopIP}
+              placeholder="192.168.1.100:8080"
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="default"
+            />
+
+            <View style={styles.statusContainer}>
+              <Text style={styles.statusLabel}>Status:</Text>
+              <Text style={[styles.statusText, desktopConnected && styles.statusConnected]}>
+                {desktopConnecting ? 'Connecting...' : desktopConnected ? 'Connected' : 'Disconnected'}
+              </Text>
+            </View>
+
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.button, styles.cancelButton]}
+                onPress={() => setShowDesktopSettings(false)}
+              >
+                <Text style={[styles.buttonText, { color: '#333' }]}>Cancel</Text>
+              </TouchableOpacity>
+              {desktopConnected ? (
+                <TouchableOpacity
+                  style={[styles.button, styles.disconnectButton]}
+                  onPress={disconnectDesktop}
+                >
+                  <Text style={[styles.buttonText, { color: '#fff' }]}>Disconnect</Text>
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity
+                  style={[styles.button, styles.saveButton]}
+                  onPress={saveDesktopSettings}
+                  disabled={desktopConnecting || !desktopIP.trim()}
+                >
+                  <Text style={[styles.buttonText, { color: '#fff' }]}>
+                    {desktopConnecting ? 'Connecting...' : 'Connect'}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </ScrollView>
+        </View>
+      </Modal>
       
       <StatusBar style="auto" />
     </View>
@@ -343,12 +530,31 @@ const styles = StyleSheet.create({
     paddingTop: 60,
     paddingHorizontal: 20,
   },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
   title: {
     fontSize: 24,
     fontWeight: 'bold',
     color: '#333',
-    marginBottom: 20,
-    textAlign: 'center',
+    flex: 1,
+  },
+  discordButton: {
+    backgroundColor: '#5865F2',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  discordButtonConnected: {
+    backgroundColor: '#57F287',
+  },
+  discordButtonText: {
+    color: '#fff',
+    fontWeight: '600',
+    fontSize: 14,
   },
   emptyText: {
     fontSize: 16,
@@ -431,5 +637,54 @@ const styles = StyleSheet.create({
   buttonText: {
     fontSize: 16,
     fontWeight: '600',
+  },
+  modalDescription: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 20,
+    lineHeight: 20,
+  },
+  warningText: {
+    color: '#ff6b6b',
+    fontWeight: '600',
+  },
+  infoText: {
+    color: '#5865F2',
+    fontWeight: '500',
+  },
+  inputLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
+    marginTop: 10,
+    marginBottom: 5,
+  },
+  inputHint: {
+    fontSize: 12,
+    color: '#999',
+    marginBottom: 8,
+    fontStyle: 'italic',
+  },
+  statusContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 15,
+  },
+  statusLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
+    marginRight: 10,
+  },
+  statusText: {
+    fontSize: 14,
+    color: '#ff6b6b',
+    fontWeight: '600',
+  },
+  statusConnected: {
+    color: '#57F287',
+  },
+  disconnectButton: {
+    backgroundColor: '#ff6b6b',
   },
 });
