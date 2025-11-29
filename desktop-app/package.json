@@ -3,17 +3,83 @@
   "version": "1.0.0",
   "description": "Desktop companion app for Android Discord Rich Presence",
   "main": "main.js",
-  "scripts": {
+  "icon": "icon.ico",
+  "scripts": { 
     "start": "electron .",
-    "dev": "electron . --dev"
+    "dev": "electron . --dev",
+    "build": "electron-builder build"
   },
   "dependencies": {
+    "cors": "^2.8.5",
     "discord-rpc": "^4.0.1",
-    "express": "^4.18.2",
-    "cors": "^2.8.5"
+    "express": "^4.18.2"
   },
   "devDependencies": {
-    "electron": "^28.0.0"
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.discordrpc.desktop",
+    "productName": "Android Discord Rich Presence Companion",
+    "copyright": "Copyright © 2025 John Uberbacher",
+    "compression": "maximum",
+    "asar": true,
+    "directories": {
+      "buildResources": "build",
+      "output": "dist"
+    },
+    "win": {
+      "target": "portable",
+      "icon": "icon.ico",
+      "artifactName": "${productName}-${version}.${ext}"
+    },
+    "files": [
+      "main.js",
+      "server.js",
+      "package.json",
+      "!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}",
+      "!**/node_modules/*/{test,__tests__,tests,powered-test,example,examples}",
+      "!**/node_modules/*.d.ts",
+      "!**/node_modules/.bin",
+      "!**/*.{iml,o,hprof,orig,pyc,pyo,rbc,swp,csproj,sln,xproj}",
+      "!.editorconfig",
+      "!**/._*",
+      "!**/{.DS_Store,.git,.hg,.svn,CVS,RCS,SCCS,.gitignore,.gitattributes}",
+      "!**/{__pycache__,thumbs.db,.flowconfig,.idea,.vs,.nyc_output}",
+      "!**/{appveyor.yml,.travis.yml,circle.yml}",
+      "!**/{npm-debug.log,yarn.lock,.yarn-integrity,.yarn-metadata.json}",
+      "node_modules/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "icon.ico",
+        "to": "icon.ico"
+      },
+      {
+        "from": "icon.png",
+        "to": "icon.png"
+      },
+      {
+        "from": "tray-icon.ico",
+        "to": "tray-icon.ico",
+        "filter": ["tray-icon.ico"]
+      },
+      {
+        "from": "tray-icon.png",
+        "to": "tray-icon.png",
+        "filter": ["tray-icon.png"]
+      }
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "johnuberbacher",
+        "repo": "android-discord-rich-presence",
+        "vPrefixedTagName": true,
+        "private": false,
+        "releaseType": "release"
+      }
+    ]
   },
   "keywords": [
     "discord",
@@ -23,4 +89,3 @@
   "author": "",
   "license": "MIT"
 }
-

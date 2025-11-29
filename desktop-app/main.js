@@ -5,6 +5,7 @@
 
 const { app, Tray, Menu, nativeImage } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const { startServer, getStatus } = require('./server');
 
 let tray = null;
@@ -22,6 +23,19 @@ if (!gotTheLock) {
   });
 
   app.whenReady().then(() => {
+    // Set app icon for Windows (appears in Task Manager, Alt+Tab, etc.)
+    const appPath = app.isPackaged ? path.dirname(process.execPath) : __dirname;
+    const appIconPath = path.join(appPath, 'icon.ico');
+    try {
+      const appIcon = nativeImage.createFromPath(appIconPath);
+      if (!appIcon.isEmpty()) {
+        app.dock?.setIcon(appIcon); // macOS dock icon
+        // Windows uses the .exe icon automatically from electron-builder
+      }
+    } catch (e) {
+      // Icon not found, will use default
+    }
+    
     createTray();
     startServer().then((info) => {
       serverInfo = info;
@@ -46,39 +60,60 @@ function createTray() {
   // Create tray icon - try .ico first (better for Windows), then .png
   let icon;
   
-  // Try .ico first (preferred for Windows tray icons - supports multiple sizes)
-  const iconPathIco = path.join(__dirname, 'icon.ico');
-  try {
-    icon = nativeImage.createFromPath(iconPathIco);
-    if (!icon.isEmpty()) {
-      // Successfully loaded .ico - Windows will auto-select best size
+  // Get the correct path for icons (works in both dev and production)
+  // In production, icons are in resources (extraResources) or same directory as .exe
+  // In dev, they're in __dirname
+  let appPath;
+  if (app.isPackaged) {
+    // For packaged apps, try resources folder first, then executable directory
+    const resourcesPath = process.resourcesPath || path.join(path.dirname(process.execPath), 'resources');
+    appPath = resourcesPath;
+    // Also check executable directory as fallback
+    const execDir = path.dirname(process.execPath);
+    // Try both locations
+    if (!fs.existsSync(path.join(appPath, 'icon.ico')) && fs.existsSync(path.join(execDir, 'icon.ico'))) {
+      appPath = execDir;
     }
-  } catch (e) {
-    // .ico not found or error, try .png
+  } else {
+    // For development, use __dirname
+    appPath = __dirname;
   }
   
-  // Fallback to .png if .ico not found or empty
-  if (!icon || icon.isEmpty()) {
-    const iconPathPng = path.join(__dirname, 'icon.png');
+  // Try tray-specific icon first (tray-icon.ico), then fallback to main icon
+  // This allows different icons for desktop .exe vs system tray
+  const iconPaths = [
+    path.join(appPath, 'tray-icon.ico'),
+    path.join(appPath, 'icon.ico'),
+    path.join(appPath, 'tray-icon.png'),
+    path.join(appPath, 'icon.png')
+  ];
+  
+  for (const iconPath of iconPaths) {
     try {
-      icon = nativeImage.createFromPath(iconPathPng);
+      icon = nativeImage.createFromPath(iconPath);
       if (!icon.isEmpty()) {
-        // Resize PNG to optimal tray icon size (16x16 @ 2x = 32x32 for high DPI)
-        // Windows tray icons are typically 16x16, but we want high DPI support
-        const size = icon.getSize();
-        // If icon is too large, resize it for better quality
-        if (size.width > 32 || size.height > 32) {
-          icon = icon.resize({ width: 32, height: 32, quality: 'best' });
-        } else if (size.width < 16 || size.height < 16) {
-          // If too small, scale up
-          icon = icon.resize({ width: 32, height: 32, quality: 'best' });
+        // Successfully loaded icon
+        // Resize PNG to optimal tray icon size if needed
+        if (iconPath.endsWith('.png')) {
+          const size = icon.getSize();
+          if (size.width > 32 || size.height > 32) {
+            icon = icon.resize({ width: 32, height: 32, quality: 'best' });
+          } else if (size.width < 16 || size.height < 16) {
+            icon = icon.resize({ width: 32, height: 32, quality: 'best' });
+          }
         }
-      } else {
-        icon = nativeImage.createEmpty();
+        break; // Found a valid icon, stop searching
       }
     } catch (e) {
-      icon = nativeImage.createEmpty();
+      // Continue to next icon path
+      continue;
     }
+  }
+  
+  // If no icon found, create a fallback
+  if (!icon || icon.isEmpty()) {
+    console.error('No tray icon found, using fallback');
+    icon = nativeImage.createEmpty();
   }
 
   // If no icon file, create a simple colored icon
