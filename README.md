@@ -97,7 +97,7 @@ cd desktop-app
 npm start
 ```
 
-4. Note the IP address shown (e.g., `192.168.1.100:8080`)
+4. Note the IP address shown (e.g., `192.168.1.100:9090`)
 
 ### 4. Configure Mobile App
 
@@ -204,7 +204,7 @@ npm run build
 - Ensure both devices are on the same WiFi network
 - Check that the desktop app is running
 - Verify the IP address is correct
-- Check firewall settings (port 8080)
+- Check firewall settings (port 9090)
 
 **"App not tracking"**
 - Make sure the foreground service notification is visible
@@ -218,8 +218,8 @@ npm run build
 - Verify CLIENT_ID is set correctly
 - Ensure your Discord application has Rich Presence enabled in the Developer Portal
 
-**"Port 8080 already in use"**
-- Change the PORT constant in `desktop-app/index.js`
+**"Port 9090 already in use"**
+- Change the PORT constant in `desktop-app/server.js`
 - Update the mobile app with the new port
 
 ## Project Structure

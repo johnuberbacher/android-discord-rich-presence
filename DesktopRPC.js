@@ -21,7 +21,7 @@ class DesktopRPC {
 
   /**
    * Initialize with desktop app IP address
-   * @param {string} ipAddress - IP address and port (e.g., "192.168.1.100:8080")
+   * @param {string} ipAddress - IP address and port (e.g., "192.168.1.100:9090")
    */
   async initialize(ipAddress) {
     if (!ipAddress || !ipAddress.trim()) {

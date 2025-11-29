@@ -25,12 +25,12 @@ npm start
 
 The app will:
 - Start in the system tray (look for the icon in the notification area)
-- Run a local HTTP server on port 8080
+- Run a local HTTP server on port 9090
 - Show connection status when you right-click the tray icon
 
 ### 3. Connect Mobile App
 
-1. Right-click the tray icon to see the server IP (e.g., `192.168.1.100:8080`)
+1. Right-click the tray icon to see the server IP (e.g., `192.168.1.100:9090`)
 2. Open your mobile app
 3. Enter this IP address in the settings
 4. Make sure both devices are on the same WiFi network
@@ -78,7 +78,7 @@ Or use a tool like `node-windows` to install as a Windows service.
 
 **"Cannot connect to desktop app"**
 - Make sure both devices are on the same WiFi network
-- Check firewall isn't blocking port 8080
+- Check firewall isn't blocking port 9090
 - Verify the IP address is correct
 - Right-click tray icon to see current server IP
 

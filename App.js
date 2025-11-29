@@ -215,7 +215,7 @@ export const updateForegroundNotification = async (title = 'Hello World', body =
     body: displayBody + (details ? ` - ${details}` : ''),
       android: {
       channelId,
-      smallIcon: 'ic_launcher', // Use app launcher icon as notification icon
+      smallIcon: 'ic_notification', // Use notification icon drawable
       asForegroundService: true, // Required for foreground service to keep running
       ongoing: true, // Make it ongoing to prevent dismissal and improve persistence
       autoCancel: false, // Prevents auto-dismissal
@@ -702,12 +702,12 @@ function AppContent({
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
         <Appbar.Header>
-          <Appbar.Content title="Detected Apps" />
-          <Appbar.Action icon="magnify" onPress={() => {}} />
+          <Appbar.Content title="Discord Rich Presence" />
           <Button
             mode="contained"
             onPress={() => setShowDesktopSettings(true)}
             buttonColor={desktopConnected ? '#57F287' : '#ff6b6b'}
+            textColor={desktopConnected ? '#000000' : '#ffffff'}
             style={styles.discordButton}
           >
             {desktopConnected ? 'Connected' : 'Disconnected'}
@@ -891,7 +891,7 @@ function AppContent({
                 label="Desktop App IP Address"
                 value={desktopIP}
                 onChangeText={setDesktopIP}
-                placeholder="192.168.1.100:8080"
+                placeholder="192.168.1.100:9090"
                 mode="outlined"
                 style={styles.textInput}
                 autoCapitalize="none"
@@ -899,7 +899,7 @@ function AppContent({
                 keyboardType="default"
               />
               <Paragraph variant="bodySmall" style={styles.inputHint}>
-                Enter the IP address shown in your desktop app (e.g., 192.168.1.100:8080)
+                Enter the IP address shown in your desktop app (e.g., 192.168.1.100:9090)
               </Paragraph>
 
               <View style={styles.statusContainer}>

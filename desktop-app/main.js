@@ -43,19 +43,42 @@ if (!gotTheLock) {
 }
 
 function createTray() {
-  // Create tray icon (you can replace this with a custom icon)
-  const iconPath = path.join(__dirname, 'icon.png');
+  // Create tray icon - try .ico first (better for Windows), then .png
   let icon;
   
+  // Try .ico first (preferred for Windows tray icons - supports multiple sizes)
+  const iconPathIco = path.join(__dirname, 'icon.ico');
   try {
-    icon = nativeImage.createFromPath(iconPath);
-    if (icon.isEmpty()) {
-      // Fallback to a simple icon if file doesn't exist
-      icon = nativeImage.createEmpty();
+    icon = nativeImage.createFromPath(iconPathIco);
+    if (!icon.isEmpty()) {
+      // Successfully loaded .ico - Windows will auto-select best size
     }
   } catch (e) {
-    // Fallback to empty icon
-    icon = nativeImage.createEmpty();
+    // .ico not found or error, try .png
+  }
+  
+  // Fallback to .png if .ico not found or empty
+  if (!icon || icon.isEmpty()) {
+    const iconPathPng = path.join(__dirname, 'icon.png');
+    try {
+      icon = nativeImage.createFromPath(iconPathPng);
+      if (!icon.isEmpty()) {
+        // Resize PNG to optimal tray icon size (16x16 @ 2x = 32x32 for high DPI)
+        // Windows tray icons are typically 16x16, but we want high DPI support
+        const size = icon.getSize();
+        // If icon is too large, resize it for better quality
+        if (size.width > 32 || size.height > 32) {
+          icon = icon.resize({ width: 32, height: 32, quality: 'best' });
+        } else if (size.width < 16 || size.height < 16) {
+          // If too small, scale up
+          icon = icon.resize({ width: 32, height: 32, quality: 'best' });
+        }
+      } else {
+        icon = nativeImage.createEmpty();
+      }
+    } catch (e) {
+      icon = nativeImage.createEmpty();
+    }
   }
 
   // If no icon file, create a simple colored icon

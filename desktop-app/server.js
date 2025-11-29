@@ -8,7 +8,7 @@ const cors = require('cors');
 const RPC = require('discord-rpc');
 const os = require('os');
 
-const PORT = 8080;
+const PORT = 9090;
 
 // Current Discord RPC client and state
 let rpc = null;
@@ -224,7 +224,7 @@ function startUpdateCheck() {
 function startServer() {
   return new Promise((resolve) => {
     app.listen(PORT, '0.0.0.0', () => {
-      console.log(`📡 Server: http://${localIP}:${PORT}`);
+      console.log(`Server: http://${localIP}:${PORT}`);
       resolve({
         ip: localIP,
         port: PORT,
