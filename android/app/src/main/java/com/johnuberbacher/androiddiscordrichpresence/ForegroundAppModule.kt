@@ -63,7 +63,7 @@ class ForegroundAppModule(reactContext: ReactApplicationContext) : ReactContextB
             var debugInfo: String = ""
             val myPackageName = reactApplicationContext.packageName
             
-            // Helper function to get app name from package
+            // Helper function to get app name from package and log additional info
             fun getAppNameFromPackage(pkg: String): Pair<String?, String> {
                 var debugMsg = ""
                 return try {
@@ -277,6 +277,35 @@ class ForegroundAppModule(reactContext: ReactApplicationContext) : ReactContextB
                     // UsageStatsManager not available or permission not granted
                     promise.resolve("null")
                     return
+                }
+            }
+            
+            // Log additional info if we found an app
+            if (packageName != null && !isSystemPackage(packageName)) {
+                try {
+                    val appInfo = packageManager.getApplicationInfo(packageName, 0)
+                    android.util.Log.d("ForegroundApp", "Package: $packageName")
+                    android.util.Log.d("ForegroundApp", "App Name: $appName")
+                    android.util.Log.d("ForegroundApp", "Version: ${packageManager.getPackageInfo(packageName, 0).versionName}")
+                    
+                    // Check if it's a known emulator
+                    val emulatorPackages = listOf(
+                        "com.retroarch", "com.retroarch.aarch64", "com.retroarch.arm64",
+                        "org.ppsspp.ppsspp", "com.dolphin.dolphinemu", "com.duckstation",
+                        "com.snes9x.explusalpha", "com.mupen64plusae.pro", "com.epsxe.ePSXe",
+                        "com.explusalpha.Mupen64PlusFZ", "com.emu8086", "com.nes.emu"
+                    )
+                    if (emulatorPackages.any { packageName.contains(it, ignoreCase = true) }) {
+                        android.util.Log.d("ForegroundApp", "🎮 EMULATOR DETECTED: $packageName")
+                    }
+                    
+                    // Check if it's likely a game (has GAME category flag)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                        val category = if ((appInfo.flags and ApplicationInfo.FLAG_IS_GAME) != 0) "GAME" else "APP"
+                        android.util.Log.d("ForegroundApp", "Category: $category")
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.d("ForegroundApp", "Could not get extra info: ${e.message}")
                 }
             }
             

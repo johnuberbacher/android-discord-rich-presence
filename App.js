@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View, AppState, NativeModules, FlatList, TouchableOpacity, TextInput, Modal, ScrollView, Alert } from 'react-native';
+import { StyleSheet, View, AppState, NativeModules, FlatList, ScrollView, Alert } from 'react-native';
+import { Appbar, PaperProvider, Text, TextInput, Button, Dialog, Portal, Switch, Card, Paragraph } from 'react-native-paper';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import notifee, { AndroidImportance, EventType } from '@notifee/react-native';
 import desktopRPC from './DesktopRPC';
@@ -13,9 +14,15 @@ const FOREGROUND_NOTIFICATION_ID = 'foreground-service-notification';
 // Store the latest notification data for restoration if dismissed
 let lastNotificationData = { title: 'Hello World', body: 'Hello World', details: '' };
 
+// Track last logged app to reduce console spam
+let lastLoggedApp = null;
+let lastLogTime = 0;
+
 // Storage keys
 const PACKAGES_STORAGE_KEY = '@packages_seen';
 const CUSTOM_NAMES_STORAGE_KEY = '@custom_names';
+const CLIENT_IDS_STORAGE_KEY = '@client_ids';
+const ENABLED_APPS_STORAGE_KEY = '@enabled_apps';
 const DESKTOP_IP_KEY = '@desktop_ip';
 const DESKTOP_ENABLED_KEY = '@desktop_enabled';
 
@@ -27,6 +34,28 @@ const getDisplayName = async (packageName) => {
     return customNames[packageName] || packageName;
   } catch (error) {
     return packageName;
+  }
+};
+
+// Function to check if an app is enabled
+// Apps are disabled by default and can only be enabled if they have a CLIENT_ID
+const isAppEnabled = async (packageName) => {
+  try {
+    const enabledAppsJson = await AsyncStorage.getItem(ENABLED_APPS_STORAGE_KEY);
+    const enabledApps = enabledAppsJson ? JSON.parse(enabledAppsJson) : {};
+    
+    // Check if app has a CLIENT_ID
+    const clientId = await getClientIdForPackage(packageName);
+    
+    // Can only be enabled if CLIENT_ID is set AND explicitly enabled
+    if (clientId) {
+      return enabledApps[packageName] === true;
+    } else {
+      // No CLIENT_ID - always disabled
+      return false;
+    }
+  } catch (error) {
+    return false; // Default to disabled on error
   }
 };
 
@@ -43,7 +72,18 @@ const storePackage = async (packageName) => {
       await AsyncStorage.setItem(PACKAGES_STORAGE_KEY, JSON.stringify(packages));
     }
   } catch (error) {
-    console.error('Error storing package:', error);
+    // Error storing package
+  }
+};
+
+// Function to get CLIENT_ID for a package
+const getClientIdForPackage = async (packageName) => {
+  try {
+    const clientIdsJson = await AsyncStorage.getItem(CLIENT_IDS_STORAGE_KEY);
+    const clientIds = clientIdsJson ? JSON.parse(clientIdsJson) : {};
+    return clientIds[packageName] || null;
+  } catch (error) {
+    return null;
   }
 };
 
@@ -54,15 +94,23 @@ const updateDiscordRPC = async (displayName, packageName) => {
       return;
     }
 
+    // Get CLIENT_ID for this package - required
+    const clientId = await getClientIdForPackage(packageName);
+    
+    // Skip if no CLIENT_ID is set
+    if (!clientId) {
+      return;
+    }
+
     // Update Discord Rich Presence via desktop app
-    await desktopRPC.setActivity(displayName, packageName);
+    await desktopRPC.setActivity(displayName, packageName, clientId);
   } catch (error) {
-    console.error('Error updating Discord RPC:', error);
+    // Error updating Discord RPC
   }
 };
 
 // Function to get foreground app name and update notification
-const updateNotificationWithForegroundApp = async (updateDiscord = true) => {
+const updateNotificationWithForegroundApp = async (updateDiscord = true, setDesktopConnectedCallback = null) => {
   try {
     if (ForegroundAppModule) {
       const result = await ForegroundAppModule.getForegroundAppName();
@@ -73,29 +121,44 @@ const updateNotificationWithForegroundApp = async (updateDiscord = true) => {
       const method = parts[2] || 'unknown';
       const debugInfo = parts[3] || '';
       
-      // Store the package
+      // Track app changes
+      const shouldLog = !lastLoggedApp || lastLoggedApp !== packageName || (Date.now() - lastLogTime) > 10000;
+      if (shouldLog) {
+        lastLoggedApp = packageName;
+        lastLogTime = Date.now();
+      }
+      
+      // Store the package (always store, even if not enabled)
       if (packageName !== 'unknown' && packageName !== 'null') {
         await storePackage(packageName);
       }
       
-      // Get custom display name
-      const displayName = await getDisplayName(packageName);
+      // Check if app is enabled
+      const appEnabled = await isAppEnabled(packageName);
       
-      // Show in notification
-      const title = displayName;
-      const body = packageName;
-      
-      await updateForegroundNotification(title, body);
-      
-      // Update Discord RPC if enabled
-      if (updateDiscord) {
-        await updateDiscordRPC(displayName, packageName);
+      // Only show notification and send RPC if app is enabled
+      if (appEnabled) {
+        // Get custom display name
+        const displayName = await getDisplayName(packageName);
+        
+        // Show in notification
+        const title = displayName;
+        const body = packageName;
+        
+        await updateForegroundNotification(title, body);
+        
+        // Update Discord RPC if enabled
+        if (updateDiscord) {
+          if (desktopRPC.isConnected) {
+            // Try to send update - connection check happens in DesktopRPC if needed
+            await updateDiscordRPC(displayName, packageName);
+          }
+        }
       }
     } else {
       await updateForegroundNotification('null', 'Module not available');
     }
   } catch (error) {
-    console.error('Error getting foreground app:', error);
     await updateForegroundNotification('null', `Error: ${error.message}`);
   }
 };
@@ -134,10 +197,16 @@ export const updateForegroundNotification = async (title = 'Hello World', body =
 export default function App() {
   const notificationIntervalRef = useRef(null);
   const packagesReloadIntervalRef = useRef(null);
+  const connectionCheckIntervalRef = useRef(null);
   const [packages, setPackages] = useState([]);
   const [editingPackage, setEditingPackage] = useState(null);
   const [editText, setEditText] = useState('');
+  const [editClientId, setEditClientId] = useState('');
+  const [testingClientId, setTestingClientId] = useState(false);
+  const [clientIdTestResult, setClientIdTestResult] = useState(null);
   const [customNames, setCustomNames] = useState({});
+  const [clientIds, setClientIds] = useState({});
+  const [enabledApps, setEnabledApps] = useState({});
   
   // Desktop RPC state
   const [desktopIP, setDesktopIP] = useState('');
@@ -173,12 +242,10 @@ export default function App() {
           try {
             const hasPermission = await ForegroundAppModule.isUsageStatsPermissionGranted();
             if (!hasPermission) {
-              console.warn('PACKAGE_USAGE_STATS permission not granted. Please enable it in Settings > Apps > Special app access > Usage access');
-              // Optionally open settings automatically
-              // await ForegroundAppModule.openUsageStatsSettings();
+              // PACKAGE_USAGE_STATS permission not granted
             }
           } catch (error) {
-            console.error('Error checking usage stats permission:', error);
+            // Error checking usage stats permission
           }
         }
         // Start with default "null" since we're not in background yet
@@ -188,7 +255,7 @@ export default function App() {
 
     startForegroundService();
 
-    // Load packages and custom names on startup
+    // Load packages, custom names, client IDs, and enabled apps on startup
     const loadPackages = async () => {
       try {
         const packagesJson = await AsyncStorage.getItem(PACKAGES_STORAGE_KEY);
@@ -198,8 +265,16 @@ export default function App() {
         const customNamesJson = await AsyncStorage.getItem(CUSTOM_NAMES_STORAGE_KEY);
         const loadedCustomNames = customNamesJson ? JSON.parse(customNamesJson) : {};
         setCustomNames(loadedCustomNames);
+        
+        const clientIdsJson = await AsyncStorage.getItem(CLIENT_IDS_STORAGE_KEY);
+        const loadedClientIds = clientIdsJson ? JSON.parse(clientIdsJson) : {};
+        setClientIds(loadedClientIds);
+        
+        const enabledAppsJson = await AsyncStorage.getItem(ENABLED_APPS_STORAGE_KEY);
+        const loadedEnabledApps = enabledAppsJson ? JSON.parse(enabledAppsJson) : {};
+        setEnabledApps(loadedEnabledApps);
       } catch (error) {
-        console.error('Error loading packages:', error);
+        // Error loading packages
       }
     };
 
@@ -218,7 +293,7 @@ export default function App() {
           }
         }
       } catch (error) {
-        console.error('Error loading desktop settings:', error);
+        // Error loading desktop settings
       }
     };
 
@@ -237,7 +312,7 @@ export default function App() {
         const { title, body, details } = lastNotificationData;
         await updateForegroundNotification(title, body, details);
       } catch (error) {
-        console.error('Error restoring notification:', error);
+        // Error restoring notification
       }
     };
 
@@ -252,10 +327,10 @@ export default function App() {
         
         // Only update if notification exists and app is in background
         if (notificationExists && AppState.currentState === 'background') {
-          await updateNotificationWithForegroundApp();
+          await updateNotificationWithForegroundApp(true, setDesktopConnected);
         }
       } catch (error) {
-        console.error('Error checking notification:', error);
+        // Error checking notification
       }
     };
 
@@ -263,7 +338,7 @@ export default function App() {
     const appStateSubscription = AppState.addEventListener('change', async (nextAppState) => {
       // When app enters background, update notification with foreground app name
       if (nextAppState === 'background') {
-        await updateNotificationWithForegroundApp();
+        await updateNotificationWithForegroundApp(true, setDesktopConnected);
       } else if (nextAppState === 'active') {
         // Reload packages when app comes to foreground
         loadPackages();
@@ -273,9 +348,20 @@ export default function App() {
     // Update notification periodically when in background (every 1 second)
     notificationIntervalRef.current = setInterval(() => {
       if (AppState.currentState === 'background') {
-        updateNotificationWithForegroundApp();
+        updateNotificationWithForegroundApp(true, setDesktopConnected);
       }
     }, 1000);
+
+    // Check connection validity every 60 seconds
+    connectionCheckIntervalRef.current = setInterval(async () => {
+      if (desktopRPC.isConnected && desktopEnabled) {
+        try {
+          await desktopRPC.testConnection();
+        } catch (error) {
+          setDesktopConnected(false);
+        }
+      }
+    }, 60000);
 
     // Cleanup: stop foreground service when component unmounts
     return () => {
@@ -285,11 +371,14 @@ export default function App() {
       if (packagesReloadIntervalRef.current) {
         clearInterval(packagesReloadIntervalRef.current);
       }
+      if (connectionCheckIntervalRef.current) {
+        clearInterval(connectionCheckIntervalRef.current);
+      }
       appStateSubscription.remove();
       notifee.stopForegroundService();
       // Disconnect desktop RPC
       if (desktopRPC.isConnected) {
-        desktopRPC.disable().catch(console.error);
+        desktopRPC.disable().catch(() => {});
       }
     };
   }, []);
@@ -310,9 +399,8 @@ export default function App() {
       Alert.alert('Success', `Connected to desktop app!${health.connected ? '\nDiscord is connected.' : '\nWaiting for Discord connection...'}`);
       
       // Update RPC with current app
-      await updateNotificationWithForegroundApp(true);
+      await updateNotificationWithForegroundApp(true, setDesktopConnected);
     } catch (error) {
-      console.error('Error connecting to desktop app:', error);
       Alert.alert('Error', `Failed to connect: ${error.message}\n\nMake sure:\n• Desktop app is running\n• Both devices on same WiFi\n• IP address is correct`);
       setDesktopConnected(false);
     } finally {
@@ -328,7 +416,7 @@ export default function App() {
       setDesktopEnabled(false);
       Alert.alert('Success', 'Disconnected from desktop app');
     } catch (error) {
-      console.error('Error disconnecting from desktop app:', error);
+      // Error disconnecting from desktop app
     }
   };
 
@@ -344,7 +432,6 @@ export default function App() {
         setShowDesktopSettings(false);
       }
     } catch (error) {
-      console.error('Error saving desktop settings:', error);
       Alert.alert('Error', 'Failed to save settings');
     }
   };
@@ -352,6 +439,8 @@ export default function App() {
   const handleEditPackage = (packageName) => {
     setEditingPackage(packageName);
     setEditText(customNames[packageName] || packageName);
+    setEditClientId(clientIds[packageName] || '');
+    setClientIdTestResult(null);
   };
 
   const saveCustomName = async () => {
@@ -365,12 +454,36 @@ export default function App() {
         delete newCustomNames[editingPackage];
       }
       
+      const newClientIds = { ...clientIds };
+      const hadClientId = !!clientIds[editingPackage];
+      const hasClientId = !!editClientId.trim();
+      
+      if (hasClientId) {
+        newClientIds[editingPackage] = editClientId.trim();
+      } else {
+        delete newClientIds[editingPackage];
+      }
+      
+      // Update enabled state based on CLIENT_ID changes
+      const newEnabledApps = { ...enabledApps };
+      if (!hasClientId && hadClientId) {
+        // CLIENT_ID was removed - disable the app
+        delete newEnabledApps[editingPackage];
+      }
+      // If CLIENT_ID was added, keep current enabled state (defaults to disabled)
+      
       await AsyncStorage.setItem(CUSTOM_NAMES_STORAGE_KEY, JSON.stringify(newCustomNames));
+      await AsyncStorage.setItem(CLIENT_IDS_STORAGE_KEY, JSON.stringify(newClientIds));
+      await AsyncStorage.setItem(ENABLED_APPS_STORAGE_KEY, JSON.stringify(newEnabledApps));
       setCustomNames(newCustomNames);
+      setClientIds(newClientIds);
+      setEnabledApps(newEnabledApps);
       setEditingPackage(null);
       setEditText('');
+      setEditClientId('');
+      setClientIdTestResult(null);
     } catch (error) {
-      console.error('Error saving custom name:', error);
+      // Error saving custom name
     }
   };
 
@@ -378,163 +491,313 @@ export default function App() {
     return customNames[packageName] || packageName;
   };
 
-  return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Detected Apps</Text>
-        <TouchableOpacity
-          style={[styles.discordButton, desktopConnected && styles.discordButtonConnected]}
-          onPress={() => setShowDesktopSettings(true)}
-        >
-          <Text style={styles.discordButtonText}>
-            {desktopConnected ? '✓ Desktop' : 'Desktop RPC'}
-          </Text>
-        </TouchableOpacity>
-      </View>
-      {packages.length === 0 ? (
-        <Text style={styles.emptyText}>No apps detected yet. Switch to another app to see it here.</Text>
-      ) : (
-        <FlatList
-          data={packages}
-          keyExtractor={(item) => item}
-          style={styles.list}
-          renderItem={({ item }) => (
-            <TouchableOpacity
-              style={styles.packageItem}
-              onPress={() => handleEditPackage(item)}
-            >
-              <Text style={styles.packageName}>{getDisplayNameForList(item)}</Text>
-              <Text style={styles.packageId}>{item}</Text>
-            </TouchableOpacity>
-          )}
-        />
-      )}
+  // Helper to check if app is enabled (considering CLIENT_ID) for UI display
+  // Apps can only be enabled if they have a CLIENT_ID set
+  const isAppEnabledForList = (packageName) => {
+    const hasClientId = !!clientIds[packageName];
+    if (!hasClientId) {
+      // No CLIENT_ID - always disabled
+      return false;
+    }
+    // Has CLIENT_ID - must be explicitly enabled
+    return enabledApps[packageName] === true;
+  };
+
+  const toggleAppEnabled = async (packageName) => {
+    try {
+      const hasClientId = !!clientIds[packageName];
       
-      <Modal
-        visible={editingPackage !== null}
-        transparent={true}
-        animationType="slide"
-        onRequestClose={() => setEditingPackage(null)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Edit App Name</Text>
-            <Text style={styles.modalPackageId}>{editingPackage}</Text>
-            <TextInput
-              style={styles.textInput}
-              value={editText}
-              onChangeText={setEditText}
-              placeholder="Enter custom name"
-              autoFocus={true}
-            />
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.button, styles.cancelButton]}
-                onPress={() => {
-                  setEditingPackage(null);
-                  setEditText('');
-                }}
-              >
-                <Text style={[styles.buttonText, { color: '#333' }]}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.button, styles.saveButton]}
-                onPress={saveCustomName}
-              >
-                <Text style={[styles.buttonText, { color: '#fff' }]}>Save</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
+      // Can only toggle if CLIENT_ID is set
+      if (!hasClientId) {
+        Alert.alert('CLIENT_ID Required', 'Please set a CLIENT_ID before enabling this app.');
+        return;
+      }
+      
+      const newEnabledApps = { ...enabledApps };
+      const currentlyEnabled = enabledApps[packageName] === true;
+      
+      // Toggle explicit enabled state
+      newEnabledApps[packageName] = !currentlyEnabled;
+      
+      await AsyncStorage.setItem(ENABLED_APPS_STORAGE_KEY, JSON.stringify(newEnabledApps));
+      setEnabledApps(newEnabledApps);
+    } catch (error) {
+      // Error toggling app enabled state
+    }
+  };
 
-      <Modal
-        visible={showDesktopSettings}
-        transparent={true}
-        animationType="slide"
-        onRequestClose={() => setShowDesktopSettings(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <ScrollView contentContainerStyle={styles.modalContent}>
-            <Text style={styles.modalTitle}>Desktop Companion App</Text>
-            <Text style={styles.modalDescription}>
-              Connect to your desktop companion app to show your current app as Discord Rich Presence.{'\n\n'}
-              <Text style={styles.infoText}>
-              ℹ️ Make sure:
-              {'\n'}• Desktop app is running
-              {'\n'}• Both devices on same WiFi
-              {'\n'}• Enter the IP shown in desktop app
-              </Text>
-            </Text>
-            
-            <Text style={styles.inputLabel}>Desktop App IP Address</Text>
-            <Text style={styles.inputHint}>
-              Enter the IP address shown in your desktop app (e.g., 192.168.1.100:8080)
-            </Text>
-            <TextInput
-              style={styles.textInput}
-              value={desktopIP}
-              onChangeText={setDesktopIP}
-              placeholder="192.168.1.100:8080"
-              autoCapitalize="none"
-              autoCorrect={false}
-              keyboardType="default"
-            />
+  // Test CLIENT_ID by attempting to connect to Discord
+  const testClientId = async () => {
+    if (!editClientId.trim()) {
+      Alert.alert('Error', 'Please enter a CLIENT_ID to test');
+      return;
+    }
 
-            <View style={styles.statusContainer}>
-              <Text style={styles.statusLabel}>Status:</Text>
-              <Text style={[styles.statusText, desktopConnected && styles.statusConnected]}>
-                {desktopConnecting ? 'Connecting...' : desktopConnected ? 'Connected' : 'Disconnected'}
-              </Text>
-            </View>
+    if (!desktopRPC.isConnected) {
+      Alert.alert('Error', 'Please connect to desktop app first');
+      return;
+    }
 
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.button, styles.cancelButton]}
-                onPress={() => setShowDesktopSettings(false)}
-              >
-                <Text style={[styles.buttonText, { color: '#333' }]}>Cancel</Text>
-              </TouchableOpacity>
-              {desktopConnected ? (
-                <TouchableOpacity
-                  style={[styles.button, styles.disconnectButton]}
-                  onPress={disconnectDesktop}
+    setTestingClientId(true);
+    setClientIdTestResult(null);
+
+    try {
+      // Send a test update with the CLIENT_ID
+      const testDisplayName = 'Test Connection';
+      const testPackageName = editingPackage || 'test';
+      
+      await desktopRPC.setActivity(testDisplayName, testPackageName, editClientId.trim());
+      
+      // Wait a moment to see if it succeeds
+      setTimeout(() => {
+        setClientIdTestResult('success');
+        setTestingClientId(false);
+        Alert.alert('Success', 'CLIENT_ID is valid! Discord connection successful.');
+      }, 1000);
+    } catch (error) {
+      setClientIdTestResult('error');
+      setTestingClientId(false);
+      Alert.alert('Error', `Failed to connect with this CLIENT_ID: ${error.message}`);
+    }
+  };
+
+  return (
+    <PaperProvider>
+      <View style={styles.container}>
+        <Appbar.Header>
+          <Appbar.Content title="Detected Apps" />
+          <Appbar.Action icon="magnify" onPress={() => {}} />
+          <Button
+            mode="contained"
+            onPress={() => setShowDesktopSettings(true)}
+            buttonColor={desktopConnected ? '#57F287' : '#5865F2'}
+            style={styles.discordButton}
+          >
+            {desktopConnected ? '✓ Desktop' : 'Desktop RPC'}
+          </Button>
+        </Appbar.Header>
+      {packages.length === 0 ? (
+        <Text variant="bodyLarge" style={styles.emptyText}>No apps detected yet. Switch to another app to see it here.</Text>
+      ) : (
+        <View style={styles.listContainer}><FlatList
+        data={packages}
+        keyExtractor={(item) => item}
+        style={styles.list}
+        renderItem={({ item }) => (
+          <Card style={styles.packageItem} onPress={() => handleEditPackage(item)}>
+            <Card.Content>
+              <View style={styles.packageItemContent}>
+                <View style={styles.packageItemText}>
+                  <Text variant="titleMedium" style={styles.packageName}>{getDisplayNameForList(item)}</Text>
+                  <Text variant="bodySmall" style={styles.packageId}>{item}</Text>
+                </View>
+                <View style={styles.packageItemActions}>
+                  <Switch
+                    value={isAppEnabledForList(item)}
+                    onValueChange={() => toggleAppEnabled(item)}
+                    disabled={!clientIds[item]}
+                  />
+                  <Button
+                    icon="pencil"
+                    mode="text"
+                    onPress={() => handleEditPackage(item)}
+                    style={styles.editButton}
+                  />
+                </View>
+              </View>
+            </Card.Content>
+          </Card>
+        )}
+      />
+   </View>   )}
+      
+      <Portal>
+        <Dialog
+          visible={editingPackage !== null}
+          onDismiss={() => {
+            setEditingPackage(null);
+            setEditText('');
+            setEditClientId('');
+            setClientIdTestResult(null);
+          }}
+          dismissable={true}
+          dismissableBackButton={true}
+          style={styles.dialog}
+        >
+          <Dialog.Title>Edit App Settings</Dialog.Title>
+          <Dialog.ScrollArea>
+            <ScrollView contentContainerStyle={styles.dialogScrollContent}>
+              <Text variant="bodySmall" style={styles.modalPackageId}>{editingPackage}</Text>
+              
+              <TextInput
+                label="Custom Name"
+                value={editText}
+                onChangeText={setEditText}
+                placeholder="Enter custom name"
+                mode="outlined"
+                style={styles.textInput}
+              />
+              <Paragraph variant="bodySmall" style={styles.inputHint}>
+                This will appear in the notification and Discord Rich Presence (details field)
+              </Paragraph>
+              
+              <View style={styles.clientIdContainer}>
+                <TextInput
+                  label="Discord CLIENT_ID (Required)"
+                  value={editClientId}
+                  onChangeText={(text) => {
+                    setEditClientId(text);
+                    setClientIdTestResult(null);
+                  }}
+                  placeholder="Enter Discord CLIENT_ID"
+                  mode="outlined"
+                  style={[styles.textInput, styles.clientIdInput]}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  keyboardType="numeric"
+                />
+                <Button
+                  mode="contained"
+                  onPress={testClientId}
+                  disabled={testingClientId || !editClientId.trim() || !desktopConnected}
+                  style={styles.testButton}
+                  loading={testingClientId}
                 >
-                  <Text style={[styles.buttonText, { color: '#fff' }]}>Disconnect</Text>
-                </TouchableOpacity>
-              ) : (
-                <TouchableOpacity
-                  style={[styles.button, styles.saveButton]}
-                  onPress={saveDesktopSettings}
-                  disabled={desktopConnecting || !desktopIP.trim()}
-                >
-                  <Text style={[styles.buttonText, { color: '#fff' }]}>
-                    {desktopConnecting ? 'Connecting...' : 'Connect'}
-                  </Text>
-                </TouchableOpacity>
+                  Test
+                </Button>
+              </View>
+              <Paragraph variant="bodySmall" style={styles.inputHint}>
+                Create a Discord app at discord.com/developers/applications and enter its Application ID here.
+                This is required for Discord Rich Presence to work.
+              </Paragraph>
+              {clientIdTestResult === 'success' && (
+                <Text variant="bodySmall" style={styles.testSuccessText}>✓ CLIENT_ID is valid</Text>
               )}
-            </View>
-          </ScrollView>
-        </View>
-      </Modal>
+              {clientIdTestResult === 'error' && (
+                <Text variant="bodySmall" style={styles.testErrorText}>✗ CLIENT_ID test failed</Text>
+              )}
+            </ScrollView>
+          </Dialog.ScrollArea>
+          <Dialog.Actions>
+            <Button
+              onPress={() => {
+                setEditingPackage(null);
+                setEditText('');
+                setEditClientId('');
+                setClientIdTestResult(null);
+              }}
+              style={styles.dialogButton}
+              contentStyle={styles.dialogButtonContent}
+            >
+              Cancel
+            </Button>
+            <Button 
+              mode="contained" 
+              onPress={saveCustomName}
+              disabled={!editClientId.trim()}
+              style={styles.dialogButton}
+              contentStyle={styles.dialogButtonContent}
+            >
+              Save
+            </Button>
+          </Dialog.Actions>
+        </Dialog>
+      </Portal>
+
+      <Portal>
+        <Dialog
+          visible={showDesktopSettings}
+          onDismiss={() => setShowDesktopSettings(false)}
+          dismissable={true}
+          dismissableBackButton={true}
+          style={styles.dialog}
+        >
+          <Dialog.Title>Desktop Companion App</Dialog.Title>
+          <Dialog.ScrollArea>
+            <ScrollView contentContainerStyle={styles.dialogScrollContent}>
+              <Paragraph variant="bodyMedium" style={styles.modalDescription}>
+                Connect to your desktop companion app to show your current app as Discord Rich Presence.
+              </Paragraph>
+              <View style={styles.infoBox}>
+                <Text variant="bodySmall" style={styles.infoBoxText}>
+                  ℹ️ Make sure:{'\n'}• Desktop app is running{'\n'}• Both devices on same WiFi{'\n'}• Enter the IP shown in desktop app
+                </Text>
+              </View>
+              
+              <TextInput
+                label="Desktop App IP Address"
+                value={desktopIP}
+                onChangeText={setDesktopIP}
+                placeholder="192.168.1.100:8080"
+                mode="outlined"
+                style={styles.textInput}
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="default"
+              />
+              <Paragraph variant="bodySmall" style={styles.inputHint}>
+                Enter the IP address shown in your desktop app (e.g., 192.168.1.100:8080)
+              </Paragraph>
+
+              <View style={styles.statusContainer}>
+                <Text variant="bodyMedium" style={styles.statusLabel}>Status:</Text>
+                <Text variant="bodyMedium" style={[styles.statusText, desktopConnected && styles.statusConnected]}>
+                  {desktopConnecting ? 'Connecting...' : desktopConnected ? 'Connected' : 'Disconnected'}
+                </Text>
+              </View>
+            </ScrollView>
+          </Dialog.ScrollArea>
+          <Dialog.Actions>
+            <Button 
+              onPress={() => setShowDesktopSettings(false)}
+              style={styles.dialogButton}
+              contentStyle={styles.dialogButtonContent}
+            >
+              Cancel
+            </Button>
+            {desktopConnected ? (
+              <Button
+                mode="contained"
+                buttonColor="#ff6b6b"
+                onPress={disconnectDesktop}
+                style={styles.dialogButton}
+                contentStyle={styles.dialogButtonContent}
+              >
+                Disconnect
+              </Button>
+            ) : (
+              <Button
+                mode="contained"
+                onPress={saveDesktopSettings}
+                disabled={desktopConnecting || !desktopIP.trim()}
+                loading={desktopConnecting}
+                style={styles.dialogButton}
+                contentStyle={styles.dialogButtonContent}
+              >
+                {desktopConnecting ? 'Connecting...' : 'Connect'}
+              </Button>
+            )}
+          </Dialog.Actions>
+        </Dialog>
+      </Portal>
       
       <StatusBar style="auto" />
-    </View>
+      </View>
+    </PaperProvider>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
-    paddingTop: 60,
-    paddingHorizontal: 20,
+    backgroundColor: '#fff'
   },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 20,
+    paddingHorizontal: 20,
   },
   title: {
     fontSize: 24,
@@ -543,18 +806,8 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   discordButton: {
-    backgroundColor: '#5865F2',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 8,
-  },
-  discordButtonConnected: {
-    backgroundColor: '#57F287',
-  },
-  discordButtonText: {
-    color: '#fff',
-    fontWeight: '600',
-    fontSize: 14,
+    marginLeft: 10,
+    marginRight: 20,
   },
   emptyText: {
     fontSize: 16,
@@ -562,46 +815,56 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 50,
   },
+  listContainer: {
+    flex: 1,
+    paddingBottom: 10,
+  },
   list: {
     flex: 1,
-  },
+    paddingHorizontal: 20,
+  }, 
   packageItem: {
-    backgroundColor: '#f5f5f5',
-    padding: 15,
     marginBottom: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#ddd',
+  },
+  packageItemContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  packageItemText: {
+    flex: 1,
+    marginRight: 10,
+  },
+  packageItemActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
   },
   packageName: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#333',
     marginBottom: 5,
   },
   packageId: {
-    fontSize: 12,
-    color: '#666',
     fontFamily: 'monospace',
   },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
+  editButton: {
+    marginLeft: 5,
   },
-  modalContent: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 20,
-    width: '80%',
-    maxWidth: 400,
+  dialog: {
+    borderRadius: 8,
+    margin: 20,
+    maxWidth: 500,
+    maxHeight: '80%',
+    alignSelf: 'center',
   },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    marginBottom: 10,
-    color: '#333',
+  dialogScrollContent: {
+    paddingHorizontal: 0,
+    paddingVertical: 8,
+  },
+  dialogButton: {
+    minWidth: 100,
+    marginHorizontal: 4,
+  },
+  dialogButtonContent: {
   },
   modalPackageId: {
     fontSize: 12,
@@ -610,33 +873,7 @@ const styles = StyleSheet.create({
     marginBottom: 15,
   },
   textInput: {
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 16,
-    marginBottom: 20,
-  },
-  modalButtons: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  button: {
-    padding: 12,
-    borderRadius: 8,
-    flex: 1,
-    marginHorizontal: 5,
-    alignItems: 'center',
-  },
-  cancelButton: {
-    backgroundColor: '#e0e0e0',
-  },
-  saveButton: {
-    backgroundColor: '#007AFF',
-  },
-  buttonText: {
-    fontSize: 16,
-    fontWeight: '600',
+    marginBottom: 10,
   },
   modalDescription: {
     fontSize: 14,
@@ -651,6 +888,18 @@ const styles = StyleSheet.create({
   infoText: {
     color: '#5865F2',
     fontWeight: '500',
+  },
+  infoBox: {
+    backgroundColor: '#f5f5f5',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 20,
+    borderLeftWidth: 4,
+    borderLeftColor: '#5865F2',
+  },
+  infoBoxText: {
+    color: '#333',
+    lineHeight: 20,
   },
   inputLabel: {
     fontSize: 14,
@@ -686,5 +935,32 @@ const styles = StyleSheet.create({
   },
   disconnectButton: {
     backgroundColor: '#ff6b6b',
+  },
+  clientIdContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  clientIdInput: {
+    flex: 1,
+    marginBottom: 0,
+  },
+  testButton: {
+    minWidth: 80,
+    marginLeft: 10,
+  },
+  testSuccessText: {
+    color: '#57F287',
+    fontSize: 12,
+    marginTop: -15,
+    marginBottom: 10,
+    fontWeight: '600',
+  },
+  testErrorText: {
+    color: '#ff6b6b',
+    fontSize: 12,
+    marginTop: -15,
+    marginBottom: 10,
+    fontWeight: '600',
   },
 });

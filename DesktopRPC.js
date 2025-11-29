@@ -15,7 +15,7 @@ class DesktopRPC {
     this.desktopIP = null;
     this.isEnabled = false;
     this.lastUpdate = null;
-    this.updateThrottle = 60000; // Throttle updates to every 60 seconds (1 minute)
+    this.updateThrottle = 60000; // Throttle updates to every 60 seconds
   }
 
   /**
@@ -43,7 +43,7 @@ class DesktopRPC {
       await AsyncStorage.setItem(DESKTOP_IP_KEY, ipAddress.trim());
       await AsyncStorage.setItem(DESKTOP_ENABLED_KEY, 'true');
     } catch (error) {
-      console.warn('Could not store desktop IP:', error);
+      // Could not store desktop IP
     }
 
     // Test connection
@@ -88,8 +88,9 @@ class DesktopRPC {
    * Update Discord Rich Presence via desktop app
    * @param {string} displayName - Display name of the app
    * @param {string} packageName - Package name of the app
+   * @param {string} clientId - Optional Discord CLIENT_ID for this app
    */
-  async setActivity(displayName, packageName) {
+  async setActivity(displayName, packageName, clientId = null) {
     if (!this.isEnabled || !this.desktopIP) {
       return;
     }
@@ -100,11 +101,11 @@ class DesktopRPC {
       return;
     }
 
-    // Skip if app is null or unknown
-    if (!displayName || displayName === 'null' || packageName === 'unknown' || packageName === 'null') {
-      await this.clearActivity();
-      return;
-    }
+    // Note: Connection check is done in App.js before calling setActivity
+    // We don't check here to avoid blocking updates unnecessarily
+
+    
+    console.log(`📤 DesktopRPC: Sending update to desktop - ${displayName} (${packageName})`);
 
     try {
       const controller = new AbortController();
@@ -119,6 +120,7 @@ class DesktopRPC {
           appName: displayName,
           packageName: packageName,
           displayName: displayName,
+          clientId: clientId, // Optional CLIENT_ID from mobile app
         }),
         signal: controller.signal,
       });
@@ -130,8 +132,9 @@ class DesktopRPC {
       }
 
       this.lastUpdate = now;
+      console.log('✅ DesktopRPC: Update sent successfully');
     } catch (error) {
-      console.error('Error updating desktop RPC:', error);
+      console.error('❌ DesktopRPC: Error updating:', error.message);
       // Don't throw - fail silently to avoid disrupting app
     }
   }
@@ -148,7 +151,7 @@ class DesktopRPC {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 3000);
       
-      await fetch(`${this.desktopIP}/clear-presence`, {
+      const response = await fetch(`${this.desktopIP}/clear-presence`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -157,8 +160,12 @@ class DesktopRPC {
       });
       
       clearTimeout(timeoutId);
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
     } catch (error) {
-      console.error('Error clearing desktop RPC:', error);
+      // Error clearing desktop RPC
     }
   }
 
@@ -171,7 +178,7 @@ class DesktopRPC {
       await AsyncStorage.setItem(DESKTOP_ENABLED_KEY, 'false');
       await this.clearActivity();
     } catch (error) {
-      console.error('Error disabling desktop RPC:', error);
+      // Error disabling desktop RPC
     }
   }
 
@@ -192,7 +199,6 @@ class DesktopRPC {
       
       return { ip, enabled: enabled === 'true' };
     } catch (error) {
-      console.error('Error loading saved IP:', error);
       return null;
     }
   }
@@ -207,7 +213,7 @@ class DesktopRPC {
       this.desktopIP = null;
       this.isEnabled = false;
     } catch (error) {
-      console.error('Error clearing saved IP:', error);
+      // Error clearing saved IP
     }
   }
 

@@ -44,7 +44,7 @@ class DiscordRPC {
         await AsyncStorage.setItem('@discord_app_id', applicationId);
       }
     } catch (error) {
-      console.warn('Could not store Discord token:', error);
+      // Could not store Discord token
     }
 
     return this.connect();
@@ -59,7 +59,6 @@ class DiscordRPC {
         this.ws = new WebSocket(DISCORD_GATEWAY_URL);
 
         this.ws.onopen = () => {
-          console.log('Discord Gateway: Connected');
           this.reconnectAttempts = 0;
         };
 
@@ -68,17 +67,15 @@ class DiscordRPC {
             const data = JSON.parse(event.data);
             this.handleGatewayMessage(data);
           } catch (error) {
-            console.error('Discord Gateway: Error parsing message:', error);
+            // Error parsing message
           }
         };
 
         this.ws.onerror = (error) => {
-          console.error('Discord Gateway: WebSocket error:', error);
           reject(error);
         };
 
         this.ws.onclose = (event) => {
-          console.log('Discord Gateway: Connection closed', event.code, event.reason);
           this.isConnected = false;
           
           if (this.heartbeatInterval) {
@@ -89,7 +86,6 @@ class DiscordRPC {
           // Attempt to reconnect if not intentional
           if (event.code !== 1000 && this.reconnectAttempts < this.maxReconnectAttempts) {
             this.reconnectAttempts++;
-            console.log(`Discord Gateway: Reconnecting (attempt ${this.reconnectAttempts})...`);
             setTimeout(() => this.connect(), 3000 * this.reconnectAttempts);
           }
         };
@@ -135,18 +131,16 @@ class DiscordRPC {
         break;
 
       case 7: // Reconnect
-        console.log('Discord Gateway: Reconnect requested');
         this.ws.close();
         setTimeout(() => this.connect(), 1000);
         break;
 
       case 9: // Invalid session
-        console.log('Discord Gateway: Invalid session, re-identifying...');
         setTimeout(() => this.identify(), 1000);
         break;
 
       default:
-        console.log('Discord Gateway: Unhandled op code:', op);
+        // Unhandled op code
     }
   }
 
@@ -158,12 +152,10 @@ class DiscordRPC {
       case 'READY':
         this.sessionId = data.session_id;
         this.isConnected = true;
-        console.log('Discord Gateway: Ready! Session ID:', this.sessionId);
         break;
 
       case 'RESUMED':
         this.isConnected = true;
-        console.log('Discord Gateway: Session resumed');
         break;
 
       default:
@@ -220,7 +212,6 @@ class DiscordRPC {
    */
   setActivity(activity) {
     if (!this.isConnected || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      console.warn('Discord Gateway: Not connected, cannot set activity');
       return;
     }
 
@@ -278,8 +269,6 @@ class DiscordRPC {
   send(data) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(data));
-    } else {
-      console.warn('Discord Gateway: Cannot send, WebSocket not open');
     }
   }
 
@@ -318,7 +307,7 @@ class DiscordRPC {
         return { token, applicationId: appId };
       }
     } catch (error) {
-      console.error('Error loading saved token:', error);
+      // Error loading saved token
     }
     return null;
   }
@@ -331,7 +320,7 @@ class DiscordRPC {
       await AsyncStorage.removeItem('@discord_token');
       await AsyncStorage.removeItem('@discord_app_id');
     } catch (error) {
-      console.error('Error clearing saved token:', error);
+      // Error clearing saved token
     }
   }
 }
