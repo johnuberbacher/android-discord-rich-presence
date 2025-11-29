@@ -76,7 +76,8 @@ class DesktopRPC {
 
       const data = await response.json();
       return {
-        connected: data.discordConnected || false,
+        connected: true, // Desktop app is reachable
+        discordConnected: data.discordConnected || false,
         ip: data.ip,
         port: data.port,
       };

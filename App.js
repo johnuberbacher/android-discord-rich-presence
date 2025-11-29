@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { StyleSheet, View, AppState, NativeModules, FlatList, ScrollView, Alert } from 'react-native';
-import { Appbar, PaperProvider, Text, TextInput, Button, Dialog, Portal, Switch, Card, Paragraph, useTheme } from 'react-native-paper';
+import { Appbar, IconButton, PaperProvider, Text, TextInput, Button, Dialog, Portal, Switch, Card, Paragraph, useTheme } from 'react-native-paper';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import notifee, { AndroidImportance, EventType } from '@notifee/react-native';
 import desktopRPC from './DesktopRPC';
@@ -88,7 +88,7 @@ const getClientIdForPackage = async (packageName) => {
 };
 
 // Function to update Discord Rich Presence via desktop app
-const updateDiscordRPC = async (displayName, packageName) => {
+const updateDiscordRPC = async (displayName, packageName, setDesktopConnectedCallback = null) => {
   try {
     if (!desktopRPC.isConnected) {
       return;
@@ -104,8 +104,25 @@ const updateDiscordRPC = async (displayName, packageName) => {
 
     // Update Discord Rich Presence via desktop app
     await desktopRPC.setActivity(displayName, packageName, clientId);
+    
+    // Check connection status after successful update (throttled to avoid too many checks)
+    if (setDesktopConnectedCallback) {
+      const now = Date.now();
+      if (!updateDiscordRPC.lastStatusCheck || (now - updateDiscordRPC.lastStatusCheck) > 10000) {
+        updateDiscordRPC.lastStatusCheck = now;
+        try {
+          const health = await desktopRPC.testConnection();
+          setDesktopConnectedCallback(health.connected);
+        } catch (error) {
+          setDesktopConnectedCallback(false);
+        }
+      }
+    }
   } catch (error) {
     // Error updating Discord RPC
+    if (setDesktopConnectedCallback) {
+      setDesktopConnectedCallback(false);
+    }
   }
 };
 
@@ -120,6 +137,15 @@ const updateNotificationWithForegroundApp = async (updateDiscord = true, setDesk
       const packageName = parts[1] || 'unknown';
       const method = parts[2] || 'unknown';
       const debugInfo = parts[3] || '';
+      
+      // Check if app name or package name is null/empty (e.g., when this app is in foreground)
+      const isNullApp = !appName || appName === 'null' || !packageName || packageName === 'null' || packageName === 'unknown';
+      
+      if (isNullApp) {
+        // Show "No app detected" when app is null or this app is in foreground
+        await updateForegroundNotification('No app detected', '');
+        return;
+      }
       
       // Track app changes
       const shouldLog = !lastLoggedApp || lastLoggedApp !== packageName || (Date.now() - lastLogTime) > 10000;
@@ -151,9 +177,12 @@ const updateNotificationWithForegroundApp = async (updateDiscord = true, setDesk
         if (updateDiscord) {
           if (desktopRPC.isConnected) {
             // Try to send update - connection check happens in DesktopRPC if needed
-            await updateDiscordRPC(displayName, packageName);
+            await updateDiscordRPC(displayName, packageName, setDesktopConnectedCallback);
           }
         }
+      } else {
+        // App is not enabled, show "No app detected"
+        await updateForegroundNotification('No app detected', '');
       }
     } else {
       await updateForegroundNotification('null', 'Module not available');
@@ -166,8 +195,12 @@ const updateNotificationWithForegroundApp = async (updateDiscord = true, setDesk
 // Function to update notification with dynamic strings
 // Export this so you can call it from anywhere in your app to update the notification
 export const updateForegroundNotification = async (title = 'Hello World', body = 'Hello World', details = '') => {
+  // Handle null values - show "No app detected" if title or body is null/empty
+  const displayTitle = (!title || title === 'null' || title.trim() === '') ? 'No app detected' : title;
+  const displayBody = (!body || body === 'null' || body.trim() === '') ? '' : body;
+  
   // Store the latest notification data for restoration if dismissed
-  lastNotificationData = { title, body, details };
+  lastNotificationData = { title: displayTitle, body: displayBody, details };
   // Create a channel (required for Android)
   const channelId = await notifee.createChannel({
     id: 'foreground-service',
@@ -178,10 +211,11 @@ export const updateForegroundNotification = async (title = 'Hello World', body =
   // Display notification as foreground service (but not persistent on screen)
   await notifee.displayNotification({
     id: FOREGROUND_NOTIFICATION_ID,
-    title: title,
-    body: body + (details ? ` - ${details}` : ''),
+    title: displayTitle,
+    body: displayBody + (details ? ` - ${details}` : ''),
       android: {
       channelId,
+      smallIcon: 'ic_launcher', // Use app launcher icon as notification icon
       asForegroundService: true, // Required for foreground service to keep running
       ongoing: true, // Make it ongoing to prevent dismissal and improve persistence
       autoCancel: false, // Prevents auto-dismissal
@@ -262,8 +296,8 @@ export default function App() {
             // Error checking usage stats permission
           }
         }
-        // Start with default "null" since we're not in background yet
-        await updateForegroundNotification('null', 'null');
+        // Start with default "No app detected" since we're not in background yet
+        await updateForegroundNotification('No app detected', '');
       }
     };
 
@@ -366,16 +400,17 @@ export default function App() {
       updateNotificationWithForegroundApp(true, setDesktopConnected);
     }, 1000);
 
-    // Check connection validity every 60 seconds
+    // Check connection validity every 15 seconds
     connectionCheckIntervalRef.current = setInterval(async () => {
       if (desktopRPC.isConnected && desktopEnabled) {
         try {
-          await desktopRPC.testConnection();
+          const health = await desktopRPC.testConnection();
+          setDesktopConnected(health.connected);
         } catch (error) {
           setDesktopConnected(false);
         }
       }
-    }, 60000);
+    }, 15000);
 
     // Cleanup: stop foreground service when component unmounts
     return () => {
@@ -672,21 +707,30 @@ function AppContent({
           <Button
             mode="contained"
             onPress={() => setShowDesktopSettings(true)}
-            buttonColor={desktopConnected ? '#57F287' : '#5865F2'}
+            buttonColor={desktopConnected ? '#57F287' : '#ff6b6b'}
             style={styles.discordButton}
           >
-            {desktopConnected ? '✓ Desktop' : 'Desktop RPC'}
+            {desktopConnected ? 'Connected' : 'Disconnected'}
           </Button>
         </Appbar.Header>
       {packages.length === 0 ? (
-        <Text variant="bodyLarge" style={styles.emptyText}>No apps detected yet. Switch to another app to see it here.</Text>
+        <View style={styles.emptyContainer}>
+          <Text variant="bodyLarge" style={styles.emptyText}>No apps detected yet. Switch to another app to see it here.</Text>
+          <Text variant="bodyMedium" style={styles.emptyHint}>
+            Note: Make sure you've enabled Usage Access for this app in Settings → Apps → Special Access → Usage Access. The app won't work without this permission.
+          </Text>
+        </View>
       ) : (
         <View style={styles.listContainer}><FlatList
         data={packages}
         keyExtractor={(item) => item}
         style={styles.list}
         renderItem={({ item }) => (
-          <Card style={styles.packageItem} onPress={() => handleEditPackage(item)}>
+          <Card style={styles.packageItem} onPress={() => {
+            if (clientIds[item]) {
+              toggleAppEnabled(item);
+            }
+          }}>
             <Card.Content>
               <View style={styles.packageItemContent}>
                 <View style={styles.packageItemText}>
@@ -699,9 +743,9 @@ function AppContent({
                     onValueChange={() => toggleAppEnabled(item)}
                     disabled={!clientIds[item]}
                   />
-                  <Button
+                  <IconButton
                     icon="pencil"
-                    mode="text"
+                    mode="contained-tonal"
                     onPress={() => handleEditPackage(item)}
                     style={styles.editButton}
                   />
@@ -820,8 +864,8 @@ function AppContent({
               <Paragraph variant="bodyMedium" style={styles.modalDescription}>
                 Connect to your desktop companion app to show your current app as Discord Rich Presence.
               </Paragraph>
-              <View style={styles.infoBox}>
-                <Text variant="bodySmall" style={styles.infoBoxText}>
+              <View style={[styles.infoBox, { backgroundColor: theme.colors.surfaceVariant }]}>
+                <Text variant="bodySmall" style={[styles.infoBoxText, { color: theme.colors.onSurfaceVariant }]}>
                   ℹ️ Make sure:{'\n'}• Desktop app is running{'\n'}• Both devices on same WiFi{'\n'}• Enter the IP shown in desktop app
                 </Text>
               </View>
@@ -859,7 +903,7 @@ function AppContent({
               </Paragraph>
 
               <View style={styles.statusContainer}>
-                <Text variant="bodyMedium" style={styles.statusLabel}>Status:</Text>
+                <Text variant="bodyMedium" style={[styles.statusLabel, { color: theme.colors.onSurface }]}>Status:</Text>
                 <Text variant="bodyMedium" style={[styles.statusText, desktopConnected && styles.statusConnected]}>
                   {desktopConnecting ? 'Connecting...' : desktopConnected ? 'Connected' : 'Disconnected'}
                 </Text>
@@ -926,11 +970,23 @@ const styles = StyleSheet.create({
     marginLeft: 10,
     marginRight: 20,
   },
+  emptyContainer: {
+    padding: 20,
+    marginTop: 50,
+  },
   emptyText: {
     fontSize: 16,
     color: '#666',
     textAlign: 'center',
-    marginTop: 50,
+    marginBottom: 15,
+  },
+  emptyHint: {
+    fontSize: 14,
+    color: '#888',
+    textAlign: 'center',
+    fontStyle: 'italic',
+    marginTop: 10,
+    paddingHorizontal: 20,
   },
   listContainer: {
     flex: 1,
@@ -989,6 +1045,22 @@ const styles = StyleSheet.create({
     fontFamily: 'monospace',
     marginBottom: 15,
   },
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    textAlign: 'center',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    fontFamily: 'monospace',
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#fff',
+    borderRadius: 8,
+    padding: 8,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    textAlign: 'center',
   textInput: {
     marginBottom: 10,
   },
@@ -1007,7 +1079,6 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   infoBox: {
-    backgroundColor: '#f5f5f5',
     borderRadius: 8,
     padding: 12,
     marginBottom: 20,
@@ -1015,7 +1086,6 @@ const styles = StyleSheet.create({
     borderLeftColor: '#5865F2',
   },
   infoBoxText: {
-    color: '#333',
     lineHeight: 20,
   },
   inputLabel: {
@@ -1039,7 +1109,6 @@ const styles = StyleSheet.create({
   statusLabel: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#333',
     marginRight: 10,
   },
   statusText: {

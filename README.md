@@ -25,13 +25,13 @@ This project uses a **desktop companion app** that connects to Discord using the
 
 ### Alternative Approach (Not Used)
 
-An alternative approach would be to use Discord's Gateway WebSocket API directly from the mobile app (similar to what `DiscordRPC.js` in this repo demonstrates). However, this method:
+An alternative approach would be to use Discord's Gateway WebSocket API directly from the mobile app. However, this method:
 
 - ⚠️ **Violates Discord's Terms of Service** - The Gateway API is intended for Discord clients, not third-party applications
 - ⚠️ **Risky** - Could result in account suspension or termination
 - ⚠️ **Unstable** - Discord may change or restrict Gateway access without notice
 
-This project includes `DiscordRPC.js` for reference/educational purposes only. **The recommended and safe method is using the desktop companion app with the official Discord RPC SDK.**
+**The recommended and safe method is using the desktop companion app with the official Discord RPC SDK.**
 
 ## Features
 
@@ -142,18 +142,22 @@ The debug APK will be at: `android/app/build/outputs/apk/debug/app-debug.apk`
 
 ### Building Desktop App
 
-The desktop app doesn't require building - just run it directly:
+The desktop app runs as a system tray application (Windows). To run it:
 
 ```bash
 cd desktop-app
+npm install
 npm start
 ```
 
-For production, you can use tools like `pkg` or `electron-builder` to create executables:
+The app will appear in your system tray. Right-click the tray icon to see the server IP address and connection status.
+
+For production, you can build a standalone executable using `electron-builder`:
 
 ```bash
-npm install -g pkg
-pkg desktop-app/index.js --targets node18-win-x64,node18-linux-x64,node18-macos-x64
+npm install -g electron-builder
+cd desktop-app
+npm run build
 ```
 
 ## Dependencies
@@ -231,7 +235,6 @@ android-discord-rich-presence/
 │   └── package.json
 ├── App.js               # Main React Native app
 ├── DesktopRPC.js        # Desktop app communication client
-├── DiscordRPC.js        # Alternative Discord RPC implementation
 └── package.json         # Mobile app dependencies
 ```
 
