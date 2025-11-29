@@ -180,10 +180,10 @@ export const updateForegroundNotification = async (title = 'Hello World', body =
     id: FOREGROUND_NOTIFICATION_ID,
     title: title,
     body: body + (details ? ` - ${details}` : ''),
-    android: {
+      android: {
       channelId,
       asForegroundService: true, // Required for foreground service to keep running
-      ongoing: false, // Allows dismissal, won't stay on screen persistently
+      ongoing: true, // Make it ongoing to prevent dismissal and improve persistence
       autoCancel: false, // Prevents auto-dismissal
       importance: AndroidImportance.LOW, // Low importance - only in notification panel
       showTimestamp: false, // Prevents timestamp display
@@ -214,6 +214,9 @@ export default function App() {
   const [desktopEnabled, setDesktopEnabled] = useState(false);
   const [showDesktopSettings, setShowDesktopSettings] = useState(false);
   const [desktopConnecting, setDesktopConnecting] = useState(false);
+  // Battery optimization state - disabled until app rebuild
+  // const [isIgnoringBatteryOptimizations, setIsIgnoringBatteryOptimizations] = useState(true);
+  const isIgnoringBatteryOptimizations = true; // Always true until rebuild
 
   useEffect(() => {
     // Register foreground service handler
@@ -244,6 +247,17 @@ export default function App() {
             if (!hasPermission) {
               // PACKAGE_USAGE_STATS permission not granted
             }
+            
+            // Check battery optimization status (disabled until app rebuild)
+            // TODO: Uncomment after rebuilding the app with new native methods
+            // try {
+            //   const isIgnoringBattery = await ForegroundAppModule.isIgnoringBatteryOptimizations();
+            //   setIsIgnoringBatteryOptimizations(isIgnoringBattery);
+            // } catch (error) {
+            //   setIsIgnoringBatteryOptimizations(true);
+            // }
+            // For now, default to true to hide warning until rebuild
+            // setIsIgnoringBatteryOptimizations(true);
           } catch (error) {
             // Error checking usage stats permission
           }
@@ -418,6 +432,25 @@ export default function App() {
     } catch (error) {
       // Error disconnecting from desktop app
     }
+  };
+
+  // Request battery optimization exemption (disabled until app rebuild)
+  const requestBatteryOptimizationExemption = async () => {
+    Alert.alert('Info', 'Battery optimization feature requires app rebuild. Please rebuild the app to use this feature.');
+    // TODO: Uncomment after rebuilding the app with new native methods
+    // try {
+    //   await ForegroundAppModule.requestIgnoreBatteryOptimizations();
+    //   setTimeout(async () => {
+    //     try {
+    //       const isIgnoring = await ForegroundAppModule.isIgnoringBatteryOptimizations();
+    //       setIsIgnoringBatteryOptimizations(isIgnoring);
+    //     } catch (error) {
+    //       // Error re-checking
+    //     }
+    //   }, 1000);
+    // } catch (error) {
+    //   Alert.alert('Error', 'Failed to open battery optimization settings');
+    // }
   };
 
   // Save desktop settings
@@ -792,6 +825,23 @@ function AppContent({
                   ℹ️ Make sure:{'\n'}• Desktop app is running{'\n'}• Both devices on same WiFi{'\n'}• Enter the IP shown in desktop app
                 </Text>
               </View>
+              
+              {/* Battery optimization warning - disabled until app rebuild */}
+              {/* {!isIgnoringBatteryOptimizations && (
+                <View style={[styles.infoBox, { borderLeftColor: '#ff9800' }]}>
+                  <Text variant="bodySmall" style={styles.infoBoxText}>
+                    ⚠️ Battery optimization is enabled. This may cause the app to stop updating when in background.{'\n\n'}
+                    For best results, disable battery optimization for this app.
+                  </Text>
+                  <Button
+                    mode="outlined"
+                    onPress={requestBatteryOptimizationExemption}
+                    style={{ marginTop: 10 }}
+                  >
+                    Disable Battery Optimization
+                  </Button>
+                </View>
+              )} */}
               
               <TextInput
                 label="Desktop App IP Address"

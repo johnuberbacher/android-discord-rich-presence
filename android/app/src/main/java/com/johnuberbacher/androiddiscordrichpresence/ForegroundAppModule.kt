@@ -10,6 +10,7 @@ import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.content.pm.ResolveInfo
 import android.os.Build
+import android.os.PowerManager
 import android.provider.Settings
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
@@ -50,6 +51,38 @@ class ForegroundAppModule(reactContext: ReactApplicationContext) : ReactContextB
             promise.resolve(true)
         } catch (e: Exception) {
             promise.reject("ERROR", "Failed to open settings", e)
+        }
+    }
+
+    @ReactMethod
+    fun isIgnoringBatteryOptimizations(promise: Promise) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                val powerManager = reactApplicationContext.getSystemService(Context.POWER_SERVICE) as PowerManager
+                val isIgnoring = powerManager.isIgnoringBatteryOptimizations(reactApplicationContext.packageName)
+                promise.resolve(isIgnoring)
+            } else {
+                promise.resolve(true) // Pre-Marshmallow, no battery optimization
+            }
+        } catch (e: Exception) {
+            promise.resolve(false)
+        }
+    }
+
+    @ReactMethod
+    fun requestIgnoreBatteryOptimizations(promise: Promise) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                intent.data = android.net.Uri.parse("package:${reactApplicationContext.packageName}")
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                reactApplicationContext.startActivity(intent)
+                promise.resolve(true)
+            } else {
+                promise.resolve(true) // Pre-Marshmallow, no need
+            }
+        } catch (e: Exception) {
+            promise.reject("ERROR", "Failed to open battery optimization settings", e)
         }
     }
 
