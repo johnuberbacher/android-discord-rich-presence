@@ -491,7 +491,9 @@ export default function App() {
       // Update RPC with current app
       await updateNotificationWithForegroundApp(true, setDesktopConnected);
     } catch (error) {
-      Alert.alert('Error', `Failed to connect: ${error.message}\n\nMake sure:\n• Desktop app is running\n• Both devices on same WiFi\n• IP address is correct`);
+      console.error('Connection error:', error);
+      const errorMessage = error?.message || String(error) || 'Unknown error';
+      Alert.alert('Error', `Failed to connect: ${errorMessage}\n\nMake sure:\n• Desktop app is running\n• Both devices on same WiFi\n• IP address is correct\n• Network permissions are granted`);
       setDesktopConnected(false);
     } finally {
       setDesktopConnecting(false);

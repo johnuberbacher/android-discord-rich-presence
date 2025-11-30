@@ -189,7 +189,12 @@ class DesktopRPC {
       const enabled = await AsyncStorage.getItem(DESKTOP_ENABLED_KEY);
       
       if (ip) {
-        this.desktopIP = ip;
+        // Ensure IP has http:// prefix for consistency
+        let formattedIp = ip.trim();
+        if (!formattedIp.startsWith('http://') && !formattedIp.startsWith('https://')) {
+          formattedIp = `http://${formattedIp}`;
+        }
+        this.desktopIP = formattedIp;
       }
       if (enabled === 'true') {
         this.isEnabled = true;
